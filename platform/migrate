@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${LIB_DIR}/lib/constants.sh"
+source "${LIB_DIR}/lib/common.sh"
+source "${LIB_DIR}/lib/logger.sh"
+source "${LIB_DIR}/lib/docker.sh"
+source "${LIB_DIR}/lib/migration.sh"
+
+parse_args "$@"
+validate_args APP ENVIRONMENT
+init_environment
+init_logger
+
+if ! run_migration; then
+    log_error "Migration failed for ${APP} (${ENVIRONMENT})"
+    exit 1
+fi

@@ -1,0 +1,21 @@
+# App compose.yml — lives in <APPS_ROOT>/<app>/compose.yml.
+# The platform sets IMAGE, IMAGE_TAG, ENVIRONMENT and APP_SLUG when deploying.
+# APP_SLUG is the app's canonical name (lowercase, e.g. "My-App" -> "my-app").
+# The platform rejects bind mounts; use named volumes for persistent data.
+
+name: ${APP_SLUG}-${ENVIRONMENT}
+
+services:
+  app:
+    container_name: ${APP_SLUG}-${ENVIRONMENT}
+    image: ${IMAGE}:${IMAGE_TAG}
+    env_file:
+      - .env
+    ports:
+      - "${APP_PORT}:80"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

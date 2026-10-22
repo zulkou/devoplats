@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PLATFORM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${PLATFORM_DIR}/lib/constants.sh"
+source "${PLATFORM_DIR}/lib/common.sh"
+source "${PLATFORM_DIR}/lib/logger.sh"
+source "${PLATFORM_DIR}/lib/docker.sh"
+source "${PLATFORM_DIR}/lib/version.sh"
+source "${PLATFORM_DIR}/lib/backup.sh"
+source "${PLATFORM_DIR}/lib/migration.sh"
+source "${PLATFORM_DIR}/lib/healthcheck.sh"
+source "${PLATFORM_DIR}/lib/validate.sh"
+source "${PLATFORM_DIR}/lib/lock.sh"
+
+parse_args "$@"
+validate_args APP ENVIRONMENT TAG
+init_environment
+init_logger
+
+log_info "Starting deployment: ${APP} (${ENVIRONMENT}) -> ${TAG}"
+acquire_deploy_lock || exit 1
+fetch_env
+validate_app_config
+
+docker_login
+
+app_service="$(load_config "migration.service" "app")"
+previous_digest="$(running_image_digest "$app_service")"
+if [[ -n "$previous_digest" ]]; then
+    set_previous_version "$previous_digest"
+    log_info "Previous image digest: ${previous_digest}"
+fi
+
+if [[ "$ENVIRONMENT" == "prod" ]]; then
+    backup_db
+fi
+
+rollback_or_cleanup() {
+    local reason="$1"
+    record_history "deploy" "$TAG" "failed"
+    if [[ -n "$(get_previous_version)" ]]; then
+        log_error "${reason} — rolling back to $(get_previous_version)"
+        exec "${PLATFORM_DIR}/rollback" --app "$APP" --env "$ENVIRONMENT" --yes
+    else
+        log_warn "${reason} and no previous version exists — stopping containers"
+        docker_down
+        exit 1
+    fi
+}
+
+docker_pull
+docker_up
+
+wait_for_service "$app_service" || rollback_or_cleanup "App service never became ready"
+
+if ! run_migration; then
+    rollback_or_cleanup "Migration failed"
+fi
+
+if healthcheck; then
+    deployed_digest="$(image_digest "${IMAGE}:${TAG}")"
+    if [[ -n "$deployed_digest" ]]; then
+        set_current_version "$deployed_digest"
+        log_info "Resolved ${TAG} -> ${deployed_digest}"
+    else
+        set_current_version "$TAG"
+        log_warn "Could not resolve an image digest for ${IMAGE}:${TAG}; recording the tag"
+    fi
+    record_history "deploy" "$TAG" "success"
+    log_ok "Deployment succeeded: ${APP} -> ${TAG}"
+else
+    rollback_or_cleanup "Healthcheck failed after deploying ${APP}:${TAG}"
+fi

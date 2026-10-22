@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PLATFORM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${PLATFORM_DIR}/lib/constants.sh"
+source "${PLATFORM_DIR}/lib/common.sh"
+source "${PLATFORM_DIR}/lib/logger.sh"
+source "${PLATFORM_DIR}/lib/webhook.sh"
+
+usage() {
+cat <<EOF
+Usage:
+  devops webhook run
+  devops webhook install [--force] [--dry-run]
+  devops webhook start
+  devops webhook stop
+  devops webhook restart
+  devops webhook status
+  devops webhook logs [--no-follow]
+EOF
+}
+
+install_unit() {
+    local force="false" dry_run="false" rendered
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force)   force="true"; shift ;;
+            --dry-run) dry_run="true"; shift ;;
+            *) die "Unknown option: $1" ;;
+        esac
+    done
+
+    require_command sed install cmp
+    [[ -f "$WEBHOOK_TEMPLATE" ]] || die "Webhook unit template not found: ${WEBHOOK_TEMPLATE}"
+    [[ "$dry_run" == "true" || -x "$WEBHOOK_BIN" ]] \
+        || die "Webhook entrypoint not found: ${WEBHOOK_BIN} (run: python3 -m venv .venv && .venv/bin/pip install -e .)"
+
+    rendered="$(mktemp)"
+    trap 'rm -f "${rendered:-}"' EXIT
+    sed \
+        -e "s|@DEVOPS_ROOT@|${DEVOPS_ROOT}|g" \
+        -e "s|@WEBHOOK_BIN@|${WEBHOOK_BIN}|g" \
+        "$WEBHOOK_TEMPLATE" > "$rendered"
+
+    if [[ "$dry_run" == "true" ]]; then
+        cat "$rendered"
+        return 0
+    fi
+
+    require_root
+    require_command systemctl
+    if webhook_unit_installed && ! cmp -s "$rendered" "$WEBHOOK_UNIT_PATH" && [[ "$force" != "true" ]]; then
+        die "Existing unit differs from the template: ${WEBHOOK_UNIT_PATH} (use --force to replace it)"
+    fi
+
+    install -m 0644 "$rendered" "$WEBHOOK_UNIT_PATH"
+    systemctl daemon-reload
+    systemctl enable "$WEBHOOK_SERVICE" >/dev/null
+    log_ok "Installed ${WEBHOOK_SERVICE} (${WEBHOOK_UNIT_PATH})"
+    log_info "Start it with: ${DEVOPS_ROOT}/bin/devops webhook start"
+}
+
+start_service() {
+    require_root
+    require_command systemctl
+    webhook_unit_installed || die "Unit not installed: ${WEBHOOK_UNIT_PATH} (run: devops webhook install)"
+    systemctl start "$WEBHOOK_SERVICE"
+    log_ok "Started ${WEBHOOK_SERVICE}"
+}
+
+stop_service() {
+    require_root
+    require_command systemctl
+    systemctl stop "$WEBHOOK_SERVICE"
+    log_ok "Stopped ${WEBHOOK_SERVICE}"
+}
+
+restart_service() {
+    require_root
+    require_command systemctl
+    webhook_unit_installed || die "Unit not installed: ${WEBHOOK_UNIT_PATH} (run: devops webhook install)"
+    systemctl restart "$WEBHOOK_SERVICE"
+    log_ok "Restarted ${WEBHOOK_SERVICE}"
+}
+
+status_service() {
+    if ! webhook_unit_installed; then
+        log_warn "Webhook unit is not installed (${WEBHOOK_UNIT_PATH})"
+        return 1
+    fi
+    if webhook_active && webhook_healthy; then
+        log_ok "Webhook is active; ${WEBHOOK_HEALTH_URL} is healthy"
+        return 0
+    fi
+    if webhook_active; then
+        log_error "Webhook is active but ${WEBHOOK_HEALTH_URL} is unreachable"
+    else
+        log_error "Webhook is not active (${WEBHOOK_SERVICE})"
+    fi
+    return 1
+}
+
+logs_service() {
+    local follow="-f"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --no-follow) follow=""; shift ;;
+            *) die "Unknown option: $1" ;;
+        esac
+    done
+    require_command journalctl
+    local args=(-u "$WEBHOOK_SERVICE" -n 100)
+    [[ -n "$follow" ]] && args+=(-f)
+    journalctl "${args[@]}"
+}
+
+run_service() {
+    [[ -x "$WEBHOOK_BIN" ]] \
+        || die "Webhook entrypoint not found: ${WEBHOOK_BIN} (run: python3 -m venv .venv && .venv/bin/pip install -e .)"
+    exec "$WEBHOOK_BIN"
+}
+
+COMMAND="${1:-}"
+[[ -z "$COMMAND" ]] && { usage; exit 1; }
+shift
+
+case "$COMMAND" in
+    run)     run_service "$@" ;;
+    install) install_unit "$@" ;;
+    start)   start_service "$@" ;;
+    stop)    stop_service "$@" ;;
+    restart) restart_service "$@" ;;
+    status)  status_service "$@" ;;
+    logs)    logs_service "$@" ;;
+    -h|--help) usage ;;
+    *) die "Unknown webhook command: $COMMAND" ;;
+esac

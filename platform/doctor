@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PLATFORM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${PLATFORM_DIR}/lib/constants.sh"
+source "${PLATFORM_DIR}/lib/common.sh"
+source "${PLATFORM_DIR}/lib/logger.sh"
+source "${PLATFORM_DIR}/lib/validate.sh"
+source "${PLATFORM_DIR}/lib/webhook.sh"
+
+parse_args "$@"
+
+if [[ -n "$APP" && -z "$ENVIRONMENT" ]]; then
+    die "--env is required with --app"
+fi
+if [[ -z "$APP" && -n "$ENVIRONMENT" ]]; then
+    die "--env requires --app"
+fi
+if [[ -z "$APP" && -n "$TAG" ]]; then
+    die "--tag requires --app"
+fi
+
+if [[ -n "$APP" ]]; then
+    validate_args APP ENVIRONMENT
+    init_environment
+    init_logger
+fi
+
+FAILED=0
+WARNED=0
+
+_check_ok()   { log_ok "$*"; }
+_check_warn() { log_warn "$*"; WARNED=1; }
+_check_fail() { log_error "$*"; FAILED=1; }
+
+_run() {
+    local seconds="$1"; shift
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$seconds" "$@"
+    else
+        "$@"
+    fi
+}
+
+_version_ge() {
+    local have="$1" want="$2" lowest
+    lowest=$(printf '%s\n%s\n' "$have" "$want" | sort -V | sed -n '1p')
+    [[ "$lowest" == "$want" ]]
+}
+
+log_info "Running platform doctor"
+
+server_version=""
+docker_root=""
+if ! info=$(_run 20 docker info --format '{{.ServerVersion}} {{.DockerRootDir}}' 2>&1); then
+    error_line=$(printf '%s\n' "$info" | sed -n '/[^[:space:]]/{p;q;}')
+    _check_fail "Docker daemon unreachable via ${DOCKER_HOST:-local daemon}: ${error_line}"
+else
+    info="${info##*$'\n'}"
+    read -r server_version docker_root <<< "$info" || true
+    _check_ok "Docker daemon reachable via ${DOCKER_HOST:-local daemon} (server ${server_version})"
+fi
+
+ssh_host=""
+ssh_port=""
+ssh_args=(-o BatchMode=yes -o ConnectTimeout=5)
+if [[ "${DOCKER_HOST:-}" == ssh://* ]]; then
+    ssh_target="${DOCKER_HOST#ssh://}"
+    ssh_target="${ssh_target%%/*}"
+    if [[ "$ssh_target" =~ ^(.+):([0-9]+)$ ]]; then
+        ssh_host="${BASH_REMATCH[1]}"
+        ssh_port="${BASH_REMATCH[2]}"
+        ssh_args+=(-p "$ssh_port")
+    else
+        ssh_host="$ssh_target"
+    fi
+    if _run 15 ssh "${ssh_args[@]}" "$ssh_host" true >/dev/null 2>&1; then
+        _check_ok "SSH connection to ${ssh_host} works"
+    else
+        _check_fail "SSH connection to ${ssh_host} failed"
+    fi
+elif [[ -n "${DOCKER_HOST:-}" ]]; then
+    _check_warn "SSH check skipped: DOCKER_HOST=${DOCKER_HOST} is not ssh://"
+else
+    _check_ok "SSH check not required for the local daemon"
+fi
+
+if [[ -n "$server_version" ]]; then
+    min_docker="${MIN_DOCKER_VERSION:-20.10.0}"
+    if _version_ge "$server_version" "$min_docker"; then
+        _check_ok "Docker Engine ${server_version} >= ${min_docker}"
+    else
+        _check_fail "Docker Engine ${server_version} is below the required ${min_docker}"
+    fi
+else
+    _check_fail "Could not determine the Docker Engine version"
+fi
+
+if compose_version=$(_run 15 docker compose version --short 2>/dev/null); then
+    compose_version="${compose_version#v}"
+    compose_version="${compose_version#Docker Compose version v}"
+    min_compose="${MIN_COMPOSE_VERSION:-2.6.0}"
+    if _version_ge "$compose_version" "$min_compose"; then
+        _check_ok "Docker Compose ${compose_version} >= ${min_compose}"
+    else
+        _check_fail "Docker Compose ${compose_version} is below the required ${min_compose}"
+    fi
+else
+    _check_fail "Docker Compose v2 is not available on this host"
+fi
+
+min_disk="${MIN_FREE_DISK_GB:-5}"
+if [[ ! "$min_disk" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    _check_fail "MIN_FREE_DISK_GB must be a number (got '${min_disk}')"
+else
+    disk_output=""
+    disk_checked="false"
+    if [[ -n "$docker_root" && -n "$ssh_host" ]]; then
+        remote_df="df -Pk $(printf '%q' "$docker_root")"
+        if disk_output=$(_run 15 ssh "${ssh_args[@]}" "$ssh_host" "$remote_df" 2>&1); then
+            disk_checked="true"
+        else
+            _check_fail "Could not read disk usage on ${ssh_host}: ${disk_output%%$'\n'*}"
+        fi
+    elif [[ -n "$docker_root" && ( -z "${DOCKER_HOST:-}" || "${DOCKER_HOST:-}" == unix://* ) ]]; then
+        disk_path="$docker_root"
+        [[ -d "$disk_path" ]] || disk_path="/"
+        if disk_output=$(df -Pk "$disk_path" 2>&1); then
+            disk_checked="true"
+        else
+            _check_fail "Could not read disk usage for ${disk_path}: ${disk_output%%$'\n'*}"
+        fi
+    else
+        _check_warn "Disk check skipped: DOCKER_HOST is not a local or ssh:// daemon"
+    fi
+
+    if [[ "$disk_checked" == "true" ]]; then
+        disk_line="${disk_output##*$'\n'}"
+        read -r _ _ _ avail _ _ <<< "$disk_line" || true
+        if [[ "$avail" =~ ^[0-9]+$ ]]; then
+            free_gb=$(awk -v kb="$avail" 'BEGIN { printf "%.1f", kb / 1024 / 1024 }')
+            if awk -v kb="$avail" -v min="$min_disk" 'BEGIN { exit !(kb >= min * 1024 * 1024) }'; then
+                _check_ok "Disk ${docker_root} has ${free_gb} GiB free (>= ${min_disk} GiB)"
+            else
+                _check_fail "Disk ${docker_root} has only ${free_gb} GiB free (need ${min_disk} GiB)"
+            fi
+        else
+            _check_fail "Could not parse disk usage: ${disk_line}"
+        fi
+    fi
+fi
+
+if [[ -f "${DEVOPS_ROOT}/.env" ]]; then
+    perms=$(stat -c '%a' "${DEVOPS_ROOT}/.env" 2>/dev/null || true)
+    if [[ "$perms" == @(600|640) ]]; then
+        _check_ok "Infra env file: ${DEVOPS_ROOT}/.env"
+    else
+        _check_warn "Infra env file ${DEVOPS_ROOT}/.env has loose permissions (${perms:-unknown}), expected 600 or 640"
+    fi
+else
+    _check_warn "No ${DEVOPS_ROOT}/.env — using shell environment only"
+fi
+load_infra_env >/dev/null
+
+if [[ -n "$APP" ]]; then
+    app_env="$(app_env_file)"
+    runtime_env="$(app_runtime_env_file)"
+    if [[ -f "$app_env" ]]; then
+        perms=$(stat -c '%a' "$app_env" 2>/dev/null || true)
+        if [[ "$perms" == @(600|640) ]]; then
+            _check_ok "App env file: ${app_env}"
+        else
+            _check_warn "App env file ${app_env} has loose permissions (${perms:-unknown}), expected 600 or 640"
+        fi
+    elif [[ -f "$runtime_env" ]]; then
+        _check_warn "App env file missing at ${app_env} — move legacy ${runtime_env} there (mode 600)"
+    else
+        _check_fail "No app env file at ${app_env} — create it (mode 600)"
+    fi
+fi
+
+registry_host="${REGISTRY%%/*}"
+if [[ -z "${GHCR_USERNAME:-}" || -z "${GHCR_TOKEN:-}" ]]; then
+    _check_fail "GHCR_USERNAME/GHCR_TOKEN are not set"
+elif [[ -z "$registry_host" ]]; then
+    _check_fail "REGISTRY is empty"
+elif printf '%s' "$GHCR_TOKEN" | _run 30 docker login "$registry_host" -u "$GHCR_USERNAME" --password-stdin >/dev/null 2>&1; then
+    _check_ok "Registry login to ${registry_host} works"
+    if [[ -n "$APP" && -n "$TAG" ]]; then
+        if _run 30 docker manifest inspect "${IMAGE}:${TAG}" >/dev/null 2>&1; then
+            _check_ok "Image ${IMAGE}:${TAG} is accessible"
+        else
+            _check_fail "Image ${IMAGE}:${TAG} is not accessible"
+        fi
+    fi
+else
+    _check_fail "Registry login to ${registry_host} failed"
+fi
+
+if [[ -n "$APP" ]]; then
+    if validate_app_config; then
+        _check_ok "App config valid for ${APP} (${ENVIRONMENT})"
+    else
+        _check_fail "App config validation failed for ${APP} (${ENVIRONMENT})"
+    fi
+fi
+
+if webhook_unit_installed; then
+    if ! command -v systemctl >/dev/null 2>&1; then
+        _check_warn "Webhook unit is installed but systemd is not available on this host"
+    elif webhook_active && webhook_healthy; then
+        _check_ok "Webhook service ${WEBHOOK_SERVICE} is active (${WEBHOOK_HEALTH_URL})"
+    elif webhook_active; then
+        _check_fail "Webhook service ${WEBHOOK_SERVICE} is active but ${WEBHOOK_HEALTH_URL} is unreachable"
+    else
+        _check_fail "Webhook service ${WEBHOOK_SERVICE} is not active — start it with: ${DEVOPS_ROOT}/bin/devops webhook start"
+    fi
+elif webhook_healthy; then
+    _check_warn "Webhook responds at ${WEBHOOK_HEALTH_URL} but ${WEBHOOK_SERVICE} is not managed by systemd"
+elif command -v systemctl >/dev/null 2>&1; then
+    _check_warn "Webhook unit is not installed — run: ${DEVOPS_ROOT}/bin/devops webhook install"
+else
+    _check_warn "Webhook check skipped: systemd is not available"
+fi
+
+if (( FAILED )); then
+    log_error "Doctor found one or more failures"
+    exit 1
+fi
+if (( WARNED )); then
+    log_warn "Doctor completed with warnings"
+else
+    log_ok "All doctor checks passed"
+fi

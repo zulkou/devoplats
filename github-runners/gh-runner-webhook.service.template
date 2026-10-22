@@ -1,0 +1,17 @@
+[Unit]
+Description=devoplats GitHub Runner Webhook
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=@DEVOPS_ROOT@
+Environment=DEVOPS_ROOT=@DEVOPS_ROOT@
+EnvironmentFile=-@DEVOPS_ROOT@/.env
+ExecStart=@WEBHOOK_BIN@
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,38 @@
+# Secrets — never commit any of these
+.env
+**/.env
+
+# Runtime/state
+locks/
+logs/
+history/
+backups/
+platform/versions/*
+!platform/versions/.gitkeep
+graphify-out/
+
+# Per-app site config (contains DB names — keep in your own private fork)
+configs/
+
+# Local AI/editor tooling
+opencode.json
+.opencode/
+.claude/
+.cursor/
+.windsurf/
+.agents/
+skills/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.github/copilot-instructions.md
+
+# Build artifacts
+**/venv/
+.venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+__pycache__/
+*.pyc

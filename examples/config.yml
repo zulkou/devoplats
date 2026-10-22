@@ -1,0 +1,27 @@
+# Copy to <install-root>/configs/<app>/config.yml — per-app platform settings.
+# App secrets belong in <install-root>/configs/<app>/.env (mode 600).
+
+healthcheck:
+  # Host must be the app container; external URLs are rejected.
+  url: http://${APP_SLUG}-${ENVIRONMENT}:80/
+  expected_status: 200
+
+migration:
+  enabled: true
+  automatic: true
+  service: app
+  command: ["php", "vendor/bin/phinx", "migrate"]
+  # enabled: false
+  # reason: "schema owned by another app's migration framework"
+
+backup:
+  databases:
+    - engine: postgres
+      service: postgres
+      name: myapp_prod
+
+test:
+  enabled: true
+  command: ["sh", "-c", "npm test"]
+  # enabled: false
+  # reason: "no test suite yet"

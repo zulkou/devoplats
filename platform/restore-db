@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${LIB_DIR}/lib/constants.sh"
+source "${LIB_DIR}/lib/common.sh"
+source "${LIB_DIR}/lib/logger.sh"
+source "${LIB_DIR}/lib/docker.sh"
+
+# Guard: must not run from GitHub Actions, and requires an interactive terminal
+[[ "${GITHUB_ACTIONS:-}" == "true" ]] && die "restore-db cannot be executed from GitHub Actions"
+[[ -t 0 ]] || die "restore-db must be run interactively"
+
+parse_args "$@"
+
+validate_args APP
+init_environment
+init_logger
+
+[[ -n "$BACKUP_FILE" ]] || die "Usage: devops restore-db --app <app> --backup <filename>"
+backup_path="${BACKUP_DIR}/${BACKUP_FILE}"
+[[ -f "$backup_path" ]] || die "Backup file not found: ${backup_path}"
+
+log_warn "!! THIS WILL OVERWRITE THE CURRENT DATABASE FOR ${APP} WITH ${BACKUP_FILE} !!"
+log_warn "Any data written after this backup was taken will be LOST."
+confirm "Type y to confirm you understand this is destructive and irreversible" || { log_info "Restore cancelled"; exit 0; }
+
+database="$(basename "$BACKUP_FILE" .sql.gz)"
+database="${database#*-}"
+database="${database#*-}"
+
+db_entries="$(yq eval ".backup.databases[] | select(.name == \"${database}\") | [.engine, .service] | @tsv" "$CONFIG_FILE" 2>/dev/null || true)"
+[[ -n "$db_entries" ]] || die "No backup config entry for database '${database}' in ${APP}"
+
+if [[ "$(grep -c . <<<"$db_entries")" -gt 1 ]]; then
+    [[ -n "$ENGINE" ]] || die "Multiple backup entries for '${database}'; specify --engine"
+    engine="$ENGINE"
+    service="$(yq eval ".backup.databases[] | select(.name == \"${database}\" and .engine == \"${ENGINE}\") | .service" "$CONFIG_FILE")"
+    [[ -n "$service" ]] || die "No ${ENGINE} entry for '${database}'"
+else
+    IFS=$'\t' read -r engine service <<<"$db_entries"
+fi
+
+prefix="BACKUP_${APP_ENVKEY}"
+db_var="${prefix}_USER"; username="${!db_var:-}"
+db_var="${prefix}_PASS"; password="${!db_var:-}"
+[[ -n "$username" && -n "$password" ]] || die "Missing ${prefix}_USER/${prefix}_PASS credentials"
+
+case "$engine" in
+    postgres)
+        gunzip -c "$backup_path" | docker exec -i -e PGPASSWORD="$password" "$service" \
+            psql -v ON_ERROR_STOP=1 -U "$username" "$database"
+        ;;
+    mysql)
+        gunzip -c "$backup_path" | docker exec -i -e MYSQL_PWD="$password" "$service" mysql -u"$username" "$database"
+        ;;
+    *)
+        die "Unsupported backup engine: $engine"
+        ;;
+esac
+
+log_ok "Database restored for ${APP} from ${BACKUP_FILE}"
+record_history "restore-db" "$BACKUP_FILE" "success"

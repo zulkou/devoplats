@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PLATFORM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${PLATFORM_DIR}/lib/constants.sh"
+source "${PLATFORM_DIR}/lib/common.sh"
+source "${PLATFORM_DIR}/lib/logger.sh"
+source "${PLATFORM_DIR}/lib/docker.sh"
+source "${PLATFORM_DIR}/lib/version.sh"
+source "${PLATFORM_DIR}/lib/healthcheck.sh"
+source "${PLATFORM_DIR}/lib/lock.sh"
+
+parse_args "$@"
+validate_args APP ENVIRONMENT
+init_environment
+init_logger
+acquire_deploy_lock || exit 1
+
+current="$(get_current_version)"
+previous="$(get_previous_version)"
+
+[[ -n "$previous" ]] || die "No previous version recorded for ${APP} — cannot rollback"
+
+log_warn "Rolling back ${APP}: ${current:-unknown} -> ${previous}"
+
+if [[ "$YES" != "true" ]]; then
+    confirm "Roll back ${APP} to ${previous}?" || { log_info "Rollback cancelled"; exit 0; }
+fi
+
+fetch_env
+docker_login
+log_warn "Recovery rollback: skipping remote-Docker config preflight; the next deploy will enforce it"
+HEALTHCHECK_ALLOW_EXTERNAL=1
+
+if is_image_digest "$previous"; then
+    rollback_tag="rollback-${previous:7:12}"
+    docker_pull_digest "$previous"
+    docker_tag_digest "$previous" "$rollback_tag"
+    IMAGE_TAG="$rollback_tag"
+    export IMAGE_TAG
+    docker_up
+else
+    log_warn "Previous version '${previous}' is a tag, not a digest; this rollback may not restore the exact image"
+    IMAGE_TAG="$previous"
+    export IMAGE_TAG
+    docker_pull
+    docker_up
+fi
+
+if healthcheck; then
+    set_previous_version "$current"
+    set_current_version "$previous"
+    log_ok "Rollback succeeded: ${APP} is now on ${previous}"
+    record_history "rollback" "$previous" "success"
+    newest_backup="$(ls -1t "${BACKUP_DIR}"/*.sql.gz 2>/dev/null | head -1)"
+    if [[ -n "$newest_backup" ]]; then
+        log_warn "This only restored the application image. If the failed deploy included a destructive migration, restore the database first (interactive terminal only): devops restore-db --app ${APP} --backup $(basename "${newest_backup}")"
+    else
+        log_warn "This only restored the application image. If the failed deploy included a destructive migration, restore the database manually (no backup found in ${BACKUP_DIR})"
+    fi
+else
+    log_error "Rollback healthcheck also failed — this needs manual intervention"
+    record_history "rollback" "$previous" "failed"
+    exit 1
+fi

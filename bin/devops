@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PLATFORM_DIR="$ROOT_DIR/platform"
+
+usage() {
+cat <<EOF
+Usage:
+  devops deploy --app APP --env ENV --tag TAG
+  devops rollback --app APP --env ENV
+  devops backup --app APP --env ENV
+  devops migrate --app APP --env ENV
+  devops healthcheck --app APP --env ENV
+  devops test --app APP
+  devops restore-db --app APP --backup FILE
+  devops doctor [--app APP --env ENV] [--tag TAG]
+  devops webhook run|install|start|stop|restart|status|logs
+EOF
+}
+
+COMMAND="${1:-}"
+[[ -z "$COMMAND" ]] && { usage; exit 1; }
+shift
+
+case "$COMMAND" in
+    deploy|rollback|backup|migrate|healthcheck|test|restore-db|doctor|webhook)
+        exec "$PLATFORM_DIR/$COMMAND" "$@"
+        ;;
+    -h|--help)
+        usage; exit 0
+        ;;
+    *)
+        echo "Unknown command: $COMMAND" >&2
+        usage
+        exit 1
+        ;;
+esac

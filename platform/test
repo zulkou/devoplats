@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${LIB_DIR}/lib/constants.sh"
+source "${LIB_DIR}/lib/common.sh"
+source "${LIB_DIR}/lib/logger.sh"
+source "${LIB_DIR}/lib/test.sh"
+
+parse_args "$@"
+validate_args APP
+init_environment
+init_logger
+fetch_env
+
+if ! run_test; then
+    log_error "Tests failed for ${APP}"
+    exit 1
+fi
+
+log_ok "Tests passed: ${APP}"

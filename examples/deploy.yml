@@ -1,0 +1,73 @@
+# App repo workflow: .github/workflows/deploy.yml
+# Requires the in-repo workflows examples/build.yml and examples/deploy-dev.yml.
+#
+# Naming: the runtime dir on the server must be named exactly like the repo
+# (byte-for-byte, original casing) — this workflow passes the repo name to
+# `devops deploy` and derives the canonical slug for image paths.
+# Slug rule (must match app_slug in platform/lib/common.sh):
+#   lowercase, runs of non-alphanumerics become "-", leading/trailing "-" trimmed.
+
+name: Deploy
+on:
+  push:
+    branches: [dev, main]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  slug:
+    runs-on: ubuntu-latest
+    outputs:
+      app: ${{ steps.slug.outputs.app }}
+    steps:
+      - id: slug
+        run: |
+          SLUG=$(echo "${{ github.event.repository.name }}" \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+          echo "app=${SLUG}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: slug
+    if: github.ref_name == 'dev'
+    uses: ./.github/workflows/build.yml
+    with:
+      app: ${{ needs.slug.outputs.app }}
+      dockerfile: .docker/Dockerfile
+
+  deploy-dev:
+    needs: build
+    if: github.ref_name == 'dev'
+    uses: ./.github/workflows/deploy-dev.yml
+    with:
+      image_tag: ${{ github.sha }}
+
+  promote:
+    if: github.ref_name == 'main'
+    runs-on: self-hosted
+    concurrency:
+      group: prod-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          SLUG=$(echo "${{ github.event.repository.name }}" \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+          docker pull ghcr.io/${OWNER}/${SLUG}:dev
+          docker tag ghcr.io/${OWNER}/${SLUG}:dev ghcr.io/${OWNER}/${SLUG}:prod
+          docker push ghcr.io/${OWNER}/${SLUG}:prod
+
+      - run: |
+          <install-root>/bin/devops deploy \
+            --app "${{ github.event.repository.name }}" \
+            --tag prod \
+            --env prod

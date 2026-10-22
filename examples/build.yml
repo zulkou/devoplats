@@ -1,0 +1,76 @@
+name: Image Builder
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        required: true
+        type: string
+
+      dockerfile:
+        required: false
+        default: Dockerfile
+        type: string
+
+      context:
+        required: false
+        default: .
+        type: string
+
+    outputs:
+      image:
+        value: ${{ jobs.build.outputs.image }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Metadata
+        id: meta
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/${OWNER}/${{ inputs.app }}"
+
+          BRANCH_TAG=${{ github.ref_name }}
+
+          if [[ "${BRANCH_TAG}" == "dev" ]]; then
+            BRANCH_TAG="dev"
+          elif [[ "${BRANCH_TAG}" == "main" ]]; then
+            BRANCH_TAG="latest"
+          fi
+
+          echo "image=${IMAGE}" >> $GITHUB_OUTPUT
+          echo "branch-tag=${BRANCH_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Build & Push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ github.sha }}
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.branch-tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
