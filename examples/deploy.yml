@@ -1,5 +1,6 @@
 # App repo workflow: .github/workflows/deploy.yml
-# Requires the in-repo workflows examples/build.yml and examples/deploy-dev.yml.
+# Requires the in-repo workflows examples/build.yml and examples/deploy-dev.yml,
+# and a Dockerfile at the repository root (the build context is the repo root).
 #
 # Naming: the runtime dir on the server must be named exactly like the repo
 # (byte-for-byte, original casing) — this workflow passes the repo name to
@@ -35,7 +36,6 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       app: ${{ needs.slug.outputs.app }}
-      dockerfile: .docker/Dockerfile
 
   deploy-dev:
     needs: build

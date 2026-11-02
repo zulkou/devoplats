@@ -8,6 +8,7 @@ source "${PLATFORM_DIR}/lib/logger.sh"
 source "${PLATFORM_DIR}/lib/docker.sh"
 source "${PLATFORM_DIR}/lib/version.sh"
 source "${PLATFORM_DIR}/lib/healthcheck.sh"
+source "${PLATFORM_DIR}/lib/restore.sh"
 source "${PLATFORM_DIR}/lib/lock.sh"
 
 parse_args "$@"
@@ -18,8 +19,17 @@ acquire_deploy_lock || exit 1
 
 current="$(get_current_version)"
 previous="$(get_previous_version)"
+restore_db="false"
 
 [[ -n "$previous" ]] || die "No previous version recorded for ${APP} — cannot rollback"
+
+if [[ "${ROLLBACK_RESTORE_DB:-}" == "true" && -n "${ROLLBACK_BACKUP_ENTRIES:-}" ]]; then
+    if [[ "$(load_config "backup.restore_on_rollback" "false")" == "true" ]]; then
+        restore_db="true"
+    else
+        log_warn "Rollback DB restore was requested but backup.restore_on_rollback is not enabled; skipping database restore"
+    fi
+fi
 
 log_warn "Rolling back ${APP}: ${current:-unknown} -> ${previous}"
 
@@ -38,13 +48,57 @@ if is_image_digest "$previous"; then
     docker_tag_digest "$previous" "$rollback_tag"
     IMAGE_TAG="$rollback_tag"
     export IMAGE_TAG
-    docker_up
 else
     log_warn "Previous version '${previous}' is a tag, not a digest; this rollback may not restore the exact image"
     IMAGE_TAG="$previous"
     export IMAGE_TAG
     docker_pull
-    docker_up
+fi
+
+if [[ "$restore_db" == "true" ]]; then
+    app_container="${APP_SLUG}-${ENVIRONMENT}"
+    log_warn "Automatic DB rollback: stopping ${app_container} before restoring the pre-deploy backup"
+    if docker inspect "$app_container" >/dev/null 2>&1; then
+        if ! docker stop "$app_container" >/dev/null; then
+            log_error "Could not stop ${app_container}; refusing to restore the database"
+            record_history "rollback" "$previous" "failed"
+            exit 1
+        fi
+    else
+        log_warn "App container ${app_container} not found; continuing with the database restore"
+    fi
+
+    log_warn "AUTOMATIC DATABASE ROLLBACK: restoring the pre-deploy backup can lose writes made after it."
+    log_warn "The restore may not remove every object created by the failed migration; verify the database afterward."
+
+    restored_count=0
+    while IFS=$'\t' read -r restore_engine restore_service restore_db_name restore_file; do
+        [[ -n "$restore_engine" && -n "$restore_service" && -n "$restore_db_name" && -n "$restore_file" ]] || continue
+        if restore_database "$restore_engine" "$restore_service" "$restore_db_name" "$restore_file"; then
+            record_history "rollback-db" "$restore_file" "success"
+            restored_count=$((restored_count + 1))
+        else
+            record_history "rollback-db" "$restore_file" "failed"
+            record_history "rollback" "$previous" "failed"
+            log_error "Automatic database rollback failed; ${APP} is left stopped for manual recovery"
+            exit 1
+        fi
+    done <<< "${ROLLBACK_BACKUP_ENTRIES}"
+
+    if [[ "$restored_count" -eq 0 ]]; then
+        log_error "No valid database backup entries were restored; refusing to start ${APP}"
+        record_history "rollback" "$previous" "failed"
+        exit 1
+    fi
+fi
+
+docker_up
+
+app_service="$(load_config "migration.service" "app")"
+if ! wait_for_service "$app_service" 60; then
+    log_error "Rollback app service never became ready — this needs manual intervention"
+    record_history "rollback" "$previous" "failed"
+    exit 1
 fi
 
 if healthcheck; then
@@ -52,11 +106,15 @@ if healthcheck; then
     set_current_version "$previous"
     log_ok "Rollback succeeded: ${APP} is now on ${previous}"
     record_history "rollback" "$previous" "success"
-    newest_backup="$(ls -1t "${BACKUP_DIR}"/*.sql.gz 2>/dev/null | head -1)"
-    if [[ -n "$newest_backup" ]]; then
-        log_warn "This only restored the application image. If the failed deploy included a destructive migration, restore the database first (interactive terminal only): devops restore-db --app ${APP} --backup $(basename "${newest_backup}")"
+    if [[ "$restore_db" == "true" ]]; then
+        log_warn "Application image and configured databases were restored from the pre-deploy backup. Verify data and schema; writes after the backup were lost."
     else
-        log_warn "This only restored the application image. If the failed deploy included a destructive migration, restore the database manually (no backup found in ${BACKUP_DIR})"
+        newest_backup="$(ls -1t "${BACKUP_DIR}"/*.sql.gz 2>/dev/null | head -1)"
+        if [[ -n "$newest_backup" ]]; then
+            log_warn "This only restored the application image. If the failed deploy included a destructive migration, restore the database first (interactive terminal only): devops restore-db --app ${APP} --backup $(basename "${newest_backup}")"
+        else
+            log_warn "This only restored the application image. If the failed deploy included a destructive migration, restore the database manually (no backup found in ${BACKUP_DIR})"
+        fi
     fi
 else
     log_error "Rollback healthcheck also failed — this needs manual intervention"

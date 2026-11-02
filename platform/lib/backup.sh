@@ -2,8 +2,11 @@
 [[ -n "${__BACKUP_SH_LOADED:-}" ]] && return
 __BACKUP_SH_LOADED=1
 
+BACKUP_ENTRIES=()
+
 backup_db() {
     local prefix failed="false"
+    BACKUP_ENTRIES=()
     prefix="BACKUP_${APP_ENVKEY}"
 
     local db_count
@@ -62,6 +65,7 @@ backup_db() {
         fi
 
         log_ok "Backup written to ${out_file}"
+        BACKUP_ENTRIES+=("${engine}"$'\t'"${service}"$'\t'"${database}"$'\t'"$(basename "$out_file")")
     done
 
     [[ "$failed" == "true" ]] && return 1

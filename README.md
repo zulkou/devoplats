@@ -108,7 +108,7 @@ Per-app settings (healthcheck, migration, backup, and tests) live in
 
 The app repo needs:
 
-1. `Dockerfile`
+1. `Dockerfile` at the repository root (the build context is the repository root)
 2. `compose.yml` — see [`examples/compose.yml`](examples/compose.yml)
 3. `.github/workflows/deploy.yml`, `build.yml`, and `deploy-dev.yml` — see
    [`examples/deploy.yml`](examples/deploy.yml), [`examples/build.yml`](examples/build.yml),
@@ -118,6 +118,11 @@ The app repo needs:
 5. App secrets: create `<install-root>/configs/<app>/.env` (mode 600). Deploy
    copies it to `<APPS_ROOT>/<app>/.env` for Compose
 6. A `dev` and `main` branch
+
+The example build workflow fixes the build context to the repository root and
+always uses the root `Dockerfile`. If you copied an older `build.yml` that
+accepted `dockerfile` or `context` inputs, remove those inputs from your
+`deploy.yml` caller and keep the `Dockerfile` at the repo root.
 
 ### Naming
 
@@ -168,6 +173,12 @@ per-app/environment lock, so a second operation for the same environment fails
 fast. Any failure → automatic rollback to the previous image digest. History in
 `history/<app>.log`, detail in `logs/<app>/deploy.log`, versions in
 `platform/versions/`.
+
+Set `backup.restore_on_rollback: true` to also restore the failed prod deploy's
+pre-deploy database backup during automatic rollback. This is opt-in,
+destructive, and best-effort: writes after the backup are lost, failed-migration
+objects may remain, and a restore failure leaves the app stopped for manual
+recovery. The automatic rollback may still exit `0`; verify history and logs.
 
 ## Docs
 

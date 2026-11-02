@@ -48,7 +48,8 @@ file.
 
 `BACKUP_<SLUG>_{USER,PASS}` are read only from `<install-root>/.env` (or an
 explicit shell override). They are never copied into app env files. The prefix
-list is configurable via `LOCAL_ONLY_ENV_PREFIXES` (default `BACKUP_`).
+list is configurable via `LOCAL_ONLY_ENV_PREFIXES` (default `BACKUP_`). The same
+credentials are used by manual `restore-db` and opt-in automatic DB rollback.
 
 When a configured backup cannot be dumped (missing credentials, unsupported
 engine, dump error), remaining databases are still attempted, partial

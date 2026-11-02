@@ -2,6 +2,8 @@
 [[ -n "${__MIGRATION_SH_LOADED:-}" ]] && return
 __MIGRATION_SH_LOADED=1
 
+MIGRATION_ATTEMPTED=0
+
 # run_migration — return 0 on success/skip, 1 if the migration actually failed
 run_migration() {
     local enabled automatic service reason
@@ -35,6 +37,8 @@ run_migration() {
         return 1
     fi
 
+    MIGRATION_ATTEMPTED=1
+    export MIGRATION_ATTEMPTED
     log_info "Running migration for ${APP}: ${cmd[*]}"
     if docker_exec "$service" "${cmd[@]}"; then
         log_ok "Migration succeeded"

@@ -91,7 +91,7 @@ webhook state, and app configuration.
 
 An app repository provides:
 
-- `Dockerfile`
+- `Dockerfile` at the repository root (the build context is the repository root)
 - `compose.yml`
 - `.github/workflows/deploy.yml`, `build.yml`, and `deploy-dev.yml`
 - `dev` and `main` branches
@@ -193,7 +193,10 @@ a Docker host.
 8. Run migrations when enabled.
 9. Probe the app `/healthcheck` URL.
 10. On success, record the deployed digest and append to history. On failure,
-    roll back to the previous digest and verify it.
+    roll back to the previous digest and verify it. If
+    `backup.restore_on_rollback: true` and a migration was attempted, the
+    auto-rollback first stops the app and restores the configured databases from
+    that deploy's pre-deploy backup.
 
 Deploy and rollback take a non-blocking `flock` per app and environment under
 `<install-root>/locks/`. Automatic rollback inherits the lock from the failed
@@ -205,7 +208,11 @@ deploy.
   in history.
 - **Backups** run before every prod deploy, with databases and credentials
   defined per app. Dumps are stored in `<install-root>/backups/<app>/`.
-- **Restore** is interactive and uses the same backup config.
+- **Restore** is interactive for manual recovery. The opt-in
+  `backup.restore_on_rollback` setting also restores the current deploy's
+  pre-deploy backups during automatic rollback; this is destructive and
+  best-effort, so writes after the backup can be lost and migration artifacts
+  may remain. If the restore fails, the app is left stopped for manual recovery.
 - **Migrations** run after the new container is up and before the HTTP
   healthcheck. A failed migration triggers rollback.
 - **Locks** prevent concurrent operations on the same app/environment.

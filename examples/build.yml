@@ -1,3 +1,5 @@
+# The app must provide a Dockerfile at the repository root. The build context
+# is always the repository root; neither path is configurable per app.
 name: Image Builder
 
 on:
@@ -5,16 +7,6 @@ on:
     inputs:
       app:
         required: true
-        type: string
-
-      dockerfile:
-        required: false
-        default: Dockerfile
-        type: string
-
-      context:
-        required: false
-        default: .
         type: string
 
     outputs:
@@ -66,8 +58,8 @@ jobs:
       - name: Build & Push
         uses: docker/build-push-action@v6
         with:
-          context: ${{ inputs.context }}
-          file: ${{ inputs.dockerfile }}
+          context: .
+          file: Dockerfile
           push: true
           tags: |
             ${{ steps.meta.outputs.image }}:${{ github.sha }}

@@ -188,6 +188,14 @@ healthcheck-host preflight checks so an app deployed before an upgrade can still
 be restored. It logs a warning that the preflight was skipped; the next normal
 deploy enforces the checks again.
 
+When `backup.restore_on_rollback: true` is set and automatic rollback follows a
+migration attempt, rollback stops the app container, restores the configured
+databases from the failed deploy's pre-deploy backup, and then starts the
+previous image. This is destructive and best-effort: writes after the backup are
+lost, migration artifacts may remain, and a restore failure leaves the app
+stopped for manual recovery. It is prod-only because backups run only for prod.
+The manual `restore-db` command remains interactive.
+
 ## Troubleshooting
 
 | Symptom | Check |

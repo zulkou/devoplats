@@ -15,6 +15,10 @@ migration:
   # reason: "schema owned by another app's migration framework"
 
 backup:
+  # Opt-in and destructive. On automatic rollback after a migration attempt,
+  # restore these databases from the pre-deploy backup. Writes made after the
+  # backup are lost, and objects created by the failed migration may remain.
+  restore_on_rollback: false
   databases:
     - engine: postgres
       service: postgres

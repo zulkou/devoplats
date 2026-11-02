@@ -37,9 +37,24 @@ if [[ "$ENVIRONMENT" == "prod" ]]; then
 fi
 
 rollback_or_cleanup() {
-    local reason="$1"
+    local reason="$1" restore_on_rollback
     record_history "deploy" "$TAG" "failed"
     if [[ -n "$(get_previous_version)" ]]; then
+        restore_on_rollback="$(load_config "backup.restore_on_rollback" "false")"
+        if [[ "$restore_on_rollback" == "true" ]]; then
+            if [[ "$ENVIRONMENT" != "prod" ]]; then
+                log_warn "Automatic database rollback is prod-only because backups run only for prod; rolling back the image only."
+            elif [[ "${MIGRATION_ATTEMPTED:-0}" != "1" ]]; then
+                log_warn "Automatic database rollback skipped because no migration was attempted; rolling back the image only."
+            elif [[ ${#BACKUP_ENTRIES[@]} -eq 0 ]]; then
+                log_warn "Automatic database rollback is enabled but no pre-deploy backups are available; rolling back the image only."
+            else
+                ROLLBACK_RESTORE_DB="true"
+                ROLLBACK_BACKUP_ENTRIES="$(printf '%s\n' "${BACKUP_ENTRIES[@]}")"
+                export ROLLBACK_RESTORE_DB ROLLBACK_BACKUP_ENTRIES
+                log_warn "Automatic database rollback is enabled; the pre-deploy backup will be restored."
+            fi
+        fi
         log_error "${reason} — rolling back to $(get_previous_version)"
         exec "${PLATFORM_DIR}/rollback" --app "$APP" --env "$ENVIRONMENT" --yes
     else
