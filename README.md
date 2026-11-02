@@ -38,11 +38,14 @@ configs/<app>/          per-app config.yml + canonical .env (server, gitignored)
 github-runners/
   cleanup.sh            manual: reaps stuck runners / prunes dangling images
   gh-runner-webhook.service.template  systemd unit (rendered by devops webhook install)
-docs/                   architecture, remote Docker, secret management
+docs/                   getting started, architecture, remote Docker, secret management
 examples/               config.yml, compose.yml, workflow templates
 ```
 
 ## Install
+
+New here? [docs/getting-started.md](docs/getting-started.md) covers where to
+run the platform (a public, always-on server) and the full setup checklist.
 
 Prerequisites: Linux host, Docker + Compose plugin (v2.6+), `python3`, `curl`,
 `yq`, and `ssh` when using a remote Docker daemon.
@@ -182,6 +185,7 @@ recovery. The automatic rollback may still exit `0`; verify history and logs.
 
 ## Docs
 
+- [docs/getting-started.md](docs/getting-started.md) — where to run the platform and the setup checklist
 - [docs/architecture.md](docs/architecture.md) — server-side architecture and deploy flow
 - [docs/remote-docker.md](docs/remote-docker.md) — remote Docker daemon setup, doctor, and constraints
 - [docs/secret-management.md](docs/secret-management.md) — local secret layout and rotation runbooks
