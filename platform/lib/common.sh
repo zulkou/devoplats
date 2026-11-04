@@ -102,7 +102,58 @@ init_environment() {
     export APP ENVIRONMENT TAG RUNTIME COMPOSE_PROJECT_DIR COMPOSE_FILE IMAGE LOG_DIR BACKUP_DIR CONFIG_FILE IMAGE_TAG
     export APP_SLUG APP_ENVKEY
 
+    resolve_docker_host
     ensure_directory "$LOG_DIR" "$BACKUP_DIR"
+}
+
+# resolve_docker_host — pick the Docker daemon for this app/environment.
+# Precedence: docker.host.<env> > docker.host > DOCKER_HOST_<ENV> > DOCKER_HOST
+# > local. One daemon per app/environment; comma-separated lists are rejected.
+resolve_docker_host() {
+    local host="" host_type="" env_key
+
+    if [[ -n "${CONFIG_FILE:-}" && -f "$CONFIG_FILE" ]]; then
+        host_type=$(yq eval '.docker.host | type' "$CONFIG_FILE" 2>/dev/null || true)
+        case "$host_type" in
+            '!!map')
+                if [[ -n "${ENVIRONMENT:-}" ]]; then
+                    host=$(yq eval ".docker.host.\"${ENVIRONMENT}\" // \"\"" "$CONFIG_FILE" 2>/dev/null || true)
+                fi
+                ;;
+            '!!str')
+                host=$(yq eval '.docker.host // ""' "$CONFIG_FILE" 2>/dev/null || true)
+                ;;
+        esac
+        [[ "$host" == "null" ]] && host=""
+    fi
+
+    if [[ -z "$host" && -n "${ENVIRONMENT:-}" ]]; then
+        env_key="DOCKER_HOST_$(printf '%s' "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
+        host="${!env_key:-}"
+    fi
+
+    [[ -n "$host" ]] || host="${DOCKER_HOST:-}"
+
+    if [[ "$host" == *[[:space:],]* ]]; then
+        die "Invalid Docker host '${host}' — one host per app/environment, comma lists are not supported"
+    fi
+
+    case "$host" in
+        ""|local)
+            unset DOCKER_HOST DOCKER_CONTEXT
+            ;;
+        ssh://*|unix://*|tcp://*)
+            export DOCKER_HOST="$host"
+            unset DOCKER_CONTEXT
+            ;;
+        *)
+            die "Invalid Docker host '${host}' — use local, ssh://, unix:// or tcp:// (one host per app/environment)"
+            ;;
+    esac
+
+    if declare -F log_info >/dev/null 2>&1; then
+        log_info "Docker target: ${DOCKER_HOST:-local daemon}"
+    fi
 }
 
 # load_config <key.path> [default] — read CONFIG_FILE through yq.

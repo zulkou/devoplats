@@ -128,6 +128,52 @@ Use `--tag` to check the exact image that a deploy will pull:
 The command exits non-zero if any check fails. Disk checks for non-SSH remotes
 are reported as warnings because the platform cannot inspect the host filesystem.
 
+## Multiple Docker hosts
+
+One platform can target several daemons. Each app/environment resolves to
+exactly one host; comma-separated host lists are rejected.
+
+Resolution order, most specific first:
+
+1. `docker.host` under `configs/<app>/config.yml`:
+
+   ```yaml
+   docker:
+     host: ssh://devoplats-remote      # applies to every environment
+   ```
+
+   ```yaml
+   docker:
+     host:
+       dev: ssh://devoplats-dev        # per environment
+       prod: ssh://devoplats-prod
+   ```
+
+   `local` forces the local daemon and ignores `DOCKER_HOST`.
+
+2. `DOCKER_HOST_<ENV>` in `<install-root>/.env` — `<ENV>` is the `--env` value
+   uppercased, non-alphanumerics become `_` (`staging` → `DOCKER_HOST_STAGING`).
+3. `DOCKER_HOST` — global default.
+4. The local daemon.
+
+Every `ssh://` alias needs an entry in the platform host's `~/.ssh/config`
+**and** in `${RUNNER_SSH_DIR}/config` with its key and `known_hosts`, because
+deploys execute inside ephemeral runners. `devops doctor` checks both.
+
+`devops doctor` checks the local daemon and every distinct configured target,
+and fails if any is unreachable. `doctor --app <app> --env <env>` checks only
+the resolved target. `github-runners/cleanup.sh` prunes dangling images on
+every configured remote host; runner cleanup stays on the local daemon.
+
+Moving an app to another host starts a second Compose stack. Stop the old one
+manually (`docker compose down` on the old host) — volumes do not migrate.
+If a target host is down, the deploy fails and automatic rollback fails with
+it; backups and history remain on the platform host either way.
+
+`restore-db` has no required environment, so pass `--env <env>` when
+`docker.host` is a per-environment map; otherwise it falls back to the global
+`DOCKER_HOST`.
+
 ## App constraints
 
 ### No bind mounts

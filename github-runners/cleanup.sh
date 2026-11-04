@@ -26,8 +26,39 @@ with_timeout() {
     fi
 }
 
-remote_host="${DOCKER_HOST:-}"
+# Collect every configured target (global, per-env, per-app) before dropping
+# DOCKER_HOST so runner cleanup stays local.
+remote_hosts=()
 remote_context="${DOCKER_CONTEXT:-}"
+
+[[ -n "${DOCKER_HOST:-}" && "${DOCKER_HOST}" != "local" ]] && remote_hosts+=("$DOCKER_HOST")
+while IFS='=' read -r key value; do
+    [[ "$key" == DOCKER_HOST_* ]] || continue
+    [[ -n "$value" && "$value" != "local" ]] && remote_hosts+=("$value")
+done < <(env)
+
+if command -v yq >/dev/null 2>&1; then
+    for cfg in "${CONFIGS_ROOT}"/*/config.yml; do
+        [[ -f "$cfg" ]] || continue
+        host_type=$(yq eval '.docker.host | type' "$cfg" 2>/dev/null || true)
+        case "$host_type" in
+            '!!str')
+                value=$(yq eval '.docker.host // ""' "$cfg" 2>/dev/null || true)
+                [[ -n "$value" && "$value" != "null" && "$value" != "local" ]] && remote_hosts+=("$value")
+                ;;
+            '!!map')
+                while IFS= read -r value; do
+                    [[ -n "$value" && "$value" != "null" && "$value" != "local" ]] && remote_hosts+=("$value")
+                done < <(yq eval '.docker.host | to_entries | .[] | .value' "$cfg" 2>/dev/null || true)
+                ;;
+        esac
+    done
+else
+    log "warning: yq not found; per-app docker.host targets will not be pruned"
+fi
+
+mapfile -t remote_hosts < <(printf '%s\n' "${remote_hosts[@]}" | awk 'NF && !seen[$0]++')
+
 unset DOCKER_HOST DOCKER_CONTEXT
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -107,10 +138,12 @@ run_local_runner_cleanup
 refresh_runner_image
 prune_dangling "local daemon" docker
 
-if [[ -n "$remote_host" ]]; then
-    prune_dangling "remote daemon" env "DOCKER_HOST=${remote_host}" docker
+if ((${#remote_hosts[@]} > 0)); then
+    for host in "${remote_hosts[@]}"; do
+        prune_dangling "remote daemon ${host}" env -u DOCKER_CONTEXT "DOCKER_HOST=${host}" docker
+    done
 elif [[ -n "$remote_context" ]]; then
-    prune_dangling "remote context ${remote_context}" env "DOCKER_CONTEXT=${remote_context}" docker
+    prune_dangling "remote context ${remote_context}" env -u DOCKER_HOST "DOCKER_CONTEXT=${remote_context}" docker
 else
-    log "remote prune skipped: DOCKER_HOST/DOCKER_CONTEXT is not set"
+    log "remote prune skipped: no Docker hosts configured"
 fi

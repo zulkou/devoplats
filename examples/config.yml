@@ -1,6 +1,17 @@
 # Copy to <install-root>/configs/<app>/config.yml — per-app platform settings.
 # App secrets belong in <install-root>/configs/<app>/.env (mode 600).
 
+# Optional: pin this app to a Docker target. One host per entry; "local"
+# forces the local daemon. Falls back to DOCKER_HOST_<ENV>, then DOCKER_HOST,
+# then the local daemon.
+#docker:
+#  host: ssh://devoplats-remote
+# or per environment:
+#docker:
+#  host:
+#    dev: ssh://devoplats-dev
+#    prod: ssh://devoplats-prod
+
 healthcheck:
   # Host must be the app container; external URLs are rejected.
   url: http://${APP_SLUG}-${ENVIRONMENT}:80/

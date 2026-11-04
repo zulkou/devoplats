@@ -50,50 +50,144 @@ _version_ge() {
 
 log_info "Running platform doctor"
 
-server_version=""
-docker_root=""
-if ! info=$(_run 20 docker info --format '{{.ServerVersion}} {{.DockerRootDir}}' 2>&1); then
-    error_line=$(printf '%s\n' "$info" | sed -n '/[^[:space:]]/{p;q;}')
-    _check_fail "Docker daemon unreachable via ${DOCKER_HOST:-local daemon}: ${error_line}"
-else
+# check_host <label> <DOCKER_HOST value> — daemon, SSH, engine and disk checks.
+# An empty value checks the local daemon; ambient DOCKER_HOST/DOCKER_CONTEXT
+# are ignored so a host is never checked twice.
+check_host() {
+    local label="$1" host="$2"
+    local -a denv=(env -u DOCKER_CONTEXT)
+    if [[ -n "$host" ]]; then
+        denv+=("DOCKER_HOST=${host}")
+    else
+        denv+=(-u DOCKER_HOST)
+    fi
+
+    local info server_version="" docker_root="" error_line
+    local ssh_host="" ssh_port=""
+    local -a ssh_args=(-o BatchMode=yes -o ConnectTimeout=5)
+
+    log_info "Checking Docker host: ${label}"
+    if ! info=$(_run 20 "${denv[@]}" docker info --format '{{.ServerVersion}} {{.DockerRootDir}}' 2>&1); then
+        error_line=$(printf '%s\n' "$info" | sed -n '/[^[:space:]]/{p;q;}')
+        _check_fail "Docker daemon unreachable via ${label}: ${error_line}"
+        return
+    fi
     info="${info##*$'\n'}"
     read -r server_version docker_root <<< "$info" || true
-    _check_ok "Docker daemon reachable via ${DOCKER_HOST:-local daemon} (server ${server_version})"
-fi
+    _check_ok "Docker daemon reachable via ${label} (server ${server_version})"
 
-ssh_host=""
-ssh_port=""
-ssh_args=(-o BatchMode=yes -o ConnectTimeout=5)
-if [[ "${DOCKER_HOST:-}" == ssh://* ]]; then
-    ssh_target="${DOCKER_HOST#ssh://}"
-    ssh_target="${ssh_target%%/*}"
-    if [[ "$ssh_target" =~ ^(.+):([0-9]+)$ ]]; then
-        ssh_host="${BASH_REMATCH[1]}"
-        ssh_port="${BASH_REMATCH[2]}"
-        ssh_args+=(-p "$ssh_port")
-    else
-        ssh_host="$ssh_target"
+    if [[ "$host" == ssh://* ]]; then
+        local ssh_target="${host#ssh://}"
+        ssh_target="${ssh_target%%/*}"
+        if [[ "$ssh_target" =~ ^(.+):([0-9]+)$ ]]; then
+            ssh_host="${BASH_REMATCH[1]}"
+            ssh_port="${BASH_REMATCH[2]}"
+            ssh_args+=(-p "$ssh_port")
+        else
+            ssh_host="$ssh_target"
+        fi
+        if _run 15 ssh "${ssh_args[@]}" "$ssh_host" true >/dev/null 2>&1; then
+            _check_ok "SSH connection to ${ssh_host} works"
+        else
+            _check_fail "SSH connection to ${ssh_host} failed"
+        fi
+        if [[ -n "${RUNNER_SSH_DIR:-}" ]]; then
+            if [[ -f "${RUNNER_SSH_DIR}/config" ]] \
+                && _run 15 ssh -F "${RUNNER_SSH_DIR}/config" "${ssh_args[@]}" "$ssh_host" true >/dev/null 2>&1; then
+                _check_ok "Runner SSH target ${ssh_host} works through ${RUNNER_SSH_DIR}/config"
+            else
+                _check_fail "Runner SSH target ${ssh_host} is not reachable through ${RUNNER_SSH_DIR}/config"
+            fi
+        else
+            _check_warn "RUNNER_SSH_DIR is not set — ephemeral runners need ${ssh_host} in their own SSH config"
+        fi
     fi
-    if _run 15 ssh "${ssh_args[@]}" "$ssh_host" true >/dev/null 2>&1; then
-        _check_ok "SSH connection to ${ssh_host} works"
-    else
-        _check_fail "SSH connection to ${ssh_host} failed"
-    fi
-elif [[ -n "${DOCKER_HOST:-}" ]]; then
-    _check_warn "SSH check skipped: DOCKER_HOST=${DOCKER_HOST} is not ssh://"
-else
-    _check_ok "SSH check not required for the local daemon"
-fi
 
-if [[ -n "$server_version" ]]; then
-    min_docker="${MIN_DOCKER_VERSION:-20.10.0}"
+    local min_docker="${MIN_DOCKER_VERSION:-20.10.0}"
     if _version_ge "$server_version" "$min_docker"; then
-        _check_ok "Docker Engine ${server_version} >= ${min_docker}"
+        _check_ok "Docker Engine ${server_version} >= ${min_docker} (${label})"
     else
-        _check_fail "Docker Engine ${server_version} is below the required ${min_docker}"
+        _check_fail "Docker Engine ${server_version} is below the required ${min_docker} (${label})"
     fi
+
+    local min_disk="${MIN_FREE_DISK_GB:-5}"
+    if [[ ! "$min_disk" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        _check_fail "MIN_FREE_DISK_GB must be a number (got '${min_disk}')"
+        return
+    fi
+
+    local disk_output="" disk_checked="false" disk_path="" remote_df=""
+    if [[ -n "$docker_root" && -n "$ssh_host" ]]; then
+        remote_df="df -Pk $(printf '%q' "$docker_root")"
+        if disk_output=$(_run 15 ssh "${ssh_args[@]}" "$ssh_host" "$remote_df" 2>&1); then
+            disk_checked="true"
+        else
+            _check_fail "Could not read disk usage on ${ssh_host}: ${disk_output%%$'\n'*}"
+        fi
+    elif [[ -n "$docker_root" && ( -z "$host" || "$host" == unix://* ) ]]; then
+        disk_path="$docker_root"
+        [[ -d "$disk_path" ]] || disk_path="/"
+        if disk_output=$(df -Pk "$disk_path" 2>&1); then
+            disk_checked="true"
+        else
+            _check_fail "Could not read disk usage for ${disk_path}: ${disk_output%%$'\n'*}"
+        fi
+    else
+        _check_warn "Disk check skipped for ${label}: not a local or ssh:// daemon"
+    fi
+
+    if [[ "$disk_checked" == "true" ]]; then
+        local disk_line avail free_gb
+        disk_line="${disk_output##*$'\n'}"
+        read -r _ _ _ avail _ _ <<< "$disk_line" || true
+        if [[ "$avail" =~ ^[0-9]+$ ]]; then
+            free_gb=$(awk -v kb="$avail" 'BEGIN { printf "%.1f", kb / 1024 / 1024 }')
+            if awk -v kb="$avail" -v min="$min_disk" 'BEGIN { exit !(kb >= min * 1024 * 1024) }'; then
+                _check_ok "Disk ${docker_root} has ${free_gb} GiB free (>= ${min_disk} GiB, ${label})"
+            else
+                _check_fail "Disk ${docker_root} has only ${free_gb} GiB free (need ${min_disk} GiB, ${label})"
+            fi
+        else
+            _check_fail "Could not parse disk usage: ${disk_line}"
+        fi
+    fi
+}
+
+# collect_docker_hosts — configured targets from the environment and app configs.
+collect_docker_hosts() {
+    [[ -n "${DOCKER_HOST:-}" && "${DOCKER_HOST}" != "local" ]] && printf '%s\n' "$DOCKER_HOST"
+    while IFS='=' read -r key value; do
+        [[ "$key" == DOCKER_HOST_* ]] || continue
+        [[ -n "$value" && "$value" != "local" ]] && printf '%s\n' "$value"
+    done < <(env)
+
+    local cfg type value
+    for cfg in "${CONFIGS_ROOT}"/*/config.yml; do
+        [[ -f "$cfg" ]] || continue
+        type=$(yq eval '.docker.host | type' "$cfg" 2>/dev/null || true)
+        case "$type" in
+            '!!str')
+                value=$(yq eval '.docker.host // ""' "$cfg" 2>/dev/null || true)
+                [[ -n "$value" && "$value" != "null" && "$value" != "local" ]] && printf '%s\n' "$value"
+                ;;
+            '!!map')
+                while IFS= read -r value; do
+                    [[ -n "$value" && "$value" != "null" && "$value" != "local" ]] && printf '%s\n' "$value"
+                done < <(yq eval '.docker.host | to_entries | .[] | .value' "$cfg" 2>/dev/null || true)
+                ;;
+        esac
+    done
+}
+
+if [[ -n "$APP" ]]; then
+    check_host "${DOCKER_HOST:-local daemon}" "${DOCKER_HOST:-}"
 else
-    _check_fail "Could not determine the Docker Engine version"
+    command -v yq >/dev/null 2>&1 || _check_warn "yq is not available; per-app docker.host targets are not checked"
+    check_host "local daemon" ""
+    while IFS= read -r host; do
+        [[ -n "$host" ]] || continue
+        check_host "$host" "$host"
+    done < <(collect_docker_hosts | awk 'NF && !seen[$0]++')
 fi
 
 if compose_version=$(_run 15 docker compose version --short 2>/dev/null); then
@@ -107,47 +201,6 @@ if compose_version=$(_run 15 docker compose version --short 2>/dev/null); then
     fi
 else
     _check_fail "Docker Compose v2 is not available on this host"
-fi
-
-min_disk="${MIN_FREE_DISK_GB:-5}"
-if [[ ! "$min_disk" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-    _check_fail "MIN_FREE_DISK_GB must be a number (got '${min_disk}')"
-else
-    disk_output=""
-    disk_checked="false"
-    if [[ -n "$docker_root" && -n "$ssh_host" ]]; then
-        remote_df="df -Pk $(printf '%q' "$docker_root")"
-        if disk_output=$(_run 15 ssh "${ssh_args[@]}" "$ssh_host" "$remote_df" 2>&1); then
-            disk_checked="true"
-        else
-            _check_fail "Could not read disk usage on ${ssh_host}: ${disk_output%%$'\n'*}"
-        fi
-    elif [[ -n "$docker_root" && ( -z "${DOCKER_HOST:-}" || "${DOCKER_HOST:-}" == unix://* ) ]]; then
-        disk_path="$docker_root"
-        [[ -d "$disk_path" ]] || disk_path="/"
-        if disk_output=$(df -Pk "$disk_path" 2>&1); then
-            disk_checked="true"
-        else
-            _check_fail "Could not read disk usage for ${disk_path}: ${disk_output%%$'\n'*}"
-        fi
-    else
-        _check_warn "Disk check skipped: DOCKER_HOST is not a local or ssh:// daemon"
-    fi
-
-    if [[ "$disk_checked" == "true" ]]; then
-        disk_line="${disk_output##*$'\n'}"
-        read -r _ _ _ avail _ _ <<< "$disk_line" || true
-        if [[ "$avail" =~ ^[0-9]+$ ]]; then
-            free_gb=$(awk -v kb="$avail" 'BEGIN { printf "%.1f", kb / 1024 / 1024 }')
-            if awk -v kb="$avail" -v min="$min_disk" 'BEGIN { exit !(kb >= min * 1024 * 1024) }'; then
-                _check_ok "Disk ${docker_root} has ${free_gb} GiB free (>= ${min_disk} GiB)"
-            else
-                _check_fail "Disk ${docker_root} has only ${free_gb} GiB free (need ${min_disk} GiB)"
-            fi
-        else
-            _check_fail "Could not parse disk usage: ${disk_line}"
-        fi
-    fi
 fi
 
 if [[ -f "${DEVOPS_ROOT}/.env" ]]; then

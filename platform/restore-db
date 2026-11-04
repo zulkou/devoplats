@@ -18,7 +18,7 @@ validate_args APP
 init_environment
 init_logger
 
-[[ -n "$BACKUP_FILE" ]] || die "Usage: devops restore-db --app <app> --backup <filename>"
+[[ -n "$BACKUP_FILE" ]] || die "Usage: devops restore-db --app <app> [--env <env>] --backup <filename>"
 backup_path="${BACKUP_DIR}/${BACKUP_FILE}"
 [[ -f "$backup_path" ]] || die "Backup file not found: ${backup_path}"
 
