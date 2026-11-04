@@ -36,8 +36,10 @@ Simplest; good when apps fit on the same box.
 
 **Split** — a small platform host (public, always-on) plus a separate Docker
 host for app containers, reached over SSH with `DOCKER_HOST=ssh://<alias>`.
-The remote host needs neither the platform checkout nor the Compose plugin.
-See [remote-docker.md](remote-docker.md).
+Targets can be split further per app (`docker.host`) or per environment
+(`DOCKER_HOST_<ENV>`); each app/environment still runs on one host. The remote
+host needs neither the platform checkout nor the Compose plugin. See
+[remote-docker.md](remote-docker.md#multiple-docker-hosts).
 
 **Suggested sizing for the platform host:** 2 vCPU, 2 GB RAM, and at least
 10 GB free disk. `devops doctor` fails below `MIN_FREE_DISK_GB` (default 5).
@@ -163,6 +165,9 @@ Optional extras:
 - [ ] Use a remote Docker host — see [remote-docker.md](remote-docker.md).
 - [ ] Review the secret layout and rotation steps in
       [secret-management.md](secret-management.md).
+
+Kubernetes apps do not use this platform: they build the same image and hand
+rollout to Argo CD or Flux. See [examples/k8s/](../examples/k8s).
 
 ### 5. Verify
 

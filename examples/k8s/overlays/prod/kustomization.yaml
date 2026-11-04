@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: myapp
+
+resources:
+  - deployment.yaml
+  - service.yaml
+
+# Replace OWNER/APP once. CI rewrites newTag to the built commit sha on every
+# push to main; Argo CD / Flux rolls out that change.
+images:
+  - name: ghcr.io/OWNER/APP
+    newTag: latest

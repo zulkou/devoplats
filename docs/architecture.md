@@ -164,12 +164,23 @@ explicitly when an app needs it.
 ## Remote Docker
 
 The daemon may run on a remote host reached over SSH
-(`DOCKER_HOST=ssh://<alias>`). Compose and the platform scripts still run on
-the platform host or ephemeral runner; images, containers, networks, and probes
-run on the remote daemon.
+(`DOCKER_HOST=ssh://<alias>`). Targets can differ per app and environment:
+`docker.host` in the app config, then `DOCKER_HOST_<ENV>`, then `DOCKER_HOST`,
+then the local daemon. Each app/environment still uses exactly one daemon;
+comma-separated host lists are rejected. Compose and the platform scripts still
+run on the platform host or ephemeral runner; images, containers, networks, and
+probes run on the selected daemon.
 
 The remote host does not need the Compose plugin, the platform checkout, or the
 app runtime directory. See [remote-docker.md](remote-docker.md).
+
+## Kubernetes apps
+
+Apps deployed to Kubernetes do not use this platform. They build the same GHCR
+image and ship manifests pinned to the commit tag; Argo CD or Flux, running
+inside the cluster, applies them on push to `main`. No webhook, runner, CLI
+command, or app config is involved. See
+[examples/k8s](../examples/k8s).
 
 ## Environments
 

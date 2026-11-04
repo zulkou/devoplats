@@ -39,7 +39,8 @@ jobs:
 
   deploy-dev:
     needs: build
-    if: github.ref_name == 'dev'
+    # Opt-in: set the DEPLOY_DEV repository variable to true.
+    if: github.ref_name == 'dev' && vars.DEPLOY_DEV == 'true'
     uses: ./.github/workflows/deploy-dev.yml
     with:
       image_tag: ${{ github.sha }}

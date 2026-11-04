@@ -39,7 +39,7 @@ github-runners/
   cleanup.sh            manual: reaps stuck runners / prunes dangling images
   gh-runner-webhook.service.template  systemd unit (rendered by devops webhook install)
 docs/                   getting started, architecture, remote Docker, secret management
-examples/               config.yml, compose.yml, workflow templates
+examples/               config.yml, compose.yml, workflow templates (Compose and k8s)
 ```
 
 ## Install
@@ -95,7 +95,7 @@ Platform knobs live in `.env` (see `.env.example` for the annotated list):
 | Runner | `RUNNER_IMAGE` (default `myoung34/github-runner:latest`), `RUNNER_SCOPE` (`org`/`repo`), `ORG_NAME`, `REPO_URL`, `DNS_SERVERS` |
 | Creds | `GHCR_USERNAME/TOKEN`, `ACCESS_TOKEN`, `GITHUB_WEBHOOK_SECRET`, `BACKUP_<APP>_USER/PASS` |
 | Webhook | `WEBHOOK_HOST/PORT`, `WEBHOOK_LOG` |
-| Docker target | `DOCKER_HOST` (remote daemon), `RUNNER_SSH_DIR`, `HEALTHCHECK_PROBE_IMAGE` |
+| Docker target | `DOCKER_HOST` / `DOCKER_HOST_<ENV>` (remote daemons), per-app `docker.host`, `RUNNER_SSH_DIR`, `HEALTHCHECK_PROBE_IMAGE` |
 | Doctor | `MIN_DOCKER_VERSION`, `MIN_COMPOSE_VERSION`, `MIN_FREE_DISK_GB` |
 | Platform | `DEPLOY_ENVS`, `SERVICE_WAIT_TIMEOUT` |
 
@@ -107,20 +107,25 @@ Per-app settings (healthcheck, migration, backup, and tests) live in
 [`examples/config.yml`](examples/config.yml). App secrets live beside it in
 `${CONFIGS_ROOT}/<app>/.env`.
 
-## Adopt an app
+## Adopt a Compose app
+
+Dev deployment is opt-in: set the `DEPLOY_DEV` repository variable to `true`
+to deploy the `dev` branch (Docker/Compose only). Dev builds always run, so
+promote has a `:dev` image to retag.
 
 The app repo needs:
 
 1. `Dockerfile` at the repository root (the build context is the repository root)
 2. `compose.yml` — see [`examples/compose.yml`](examples/compose.yml)
 3. `.github/workflows/deploy.yml`, `build.yml`, and `deploy-dev.yml` — see
-   [`examples/deploy.yml`](examples/deploy.yml), [`examples/build.yml`](examples/build.yml),
-   and [`examples/deploy-dev.yml`](examples/deploy-dev.yml) (copy them into the app repo)
+   [`examples/deploy.yml`](examples/deploy.yml),
+   [`examples/build.yml`](examples/build.yml), and
+   [`examples/deploy-dev.yml`](examples/deploy-dev.yml) (copy them into the app repo)
 4. On the server: `<APPS_ROOT>/<app>/compose.yml` (same file) and
    `<install-root>/configs/<app>/config.yml` — see [`examples/config.yml`](examples/config.yml)
 5. App secrets: create `<install-root>/configs/<app>/.env` (mode 600). Deploy
    copies it to `<APPS_ROOT>/<app>/.env` for Compose
-6. A `dev` and `main` branch
+6. `main` and `dev` branches — `dev` builds the `:dev` image that prod promotes
 
 The example build workflow fixes the build context to the repository root and
 always uses the root `Dockerfile`. If you copied an older `build.yml` that
@@ -150,6 +155,26 @@ files and `config.yml` should reference `${APP_SLUG}` instead of hardcoding
 the app name. Two names that derive the same slug (e.g. `My-App` and
 `my.app`) collide — don't adopt both on one platform.
 
+## Adopt a Kubernetes app
+
+Kubernetes apps do not use this platform. They build the same GHCR image and
+let Argo CD or Flux roll it out from git:
+
+1. `Dockerfile` at the repository root.
+2. `k8s/overlays/prod/` with a Deployment (readiness/liveness probes are the
+   healthcheck), a Service, and your Ingress. Start from
+   [`examples/k8s/`](examples/k8s).
+3. `.github/workflows/deploy.yml` from
+   [`examples/k8s/deploy.yml`](examples/k8s/deploy.yml): build on `main`, pin
+   the commit tag in the overlay, commit that pin to `main`.
+4. An Argo CD / Flux Application watching `main` and `k8s/overlays/prod`.
+
+The platform host is never contacted: no self-hosted job means no webhook
+event, no runner, and no `configs/<app>/` entry. Dev is optional and, on this
+platform, Compose-only. See
+[`examples/k8s/README.md`](examples/k8s/README.md) for probes, secrets,
+rollback, and backups.
+
 ## CLI
 
 ```
@@ -159,7 +184,7 @@ devops backup    --app APP --env ENV             # dump DBs listed in config.yml
 devops migrate   --app APP --env ENV             # run migration.command in container
 devops healthcheck --app APP --env ENV           # GET healthcheck.url
 devops test      --app APP                       # run test.command/steps in <APPS_ROOT>/<app>
-devops restore-db --app APP --backup FILE        # interactive only — never from CI
+devops restore-db --app APP [--env ENV] --backup FILE  # interactive only — never from CI
 devops doctor [--app APP --env ENV] [--tag TAG]  # SSH/engine/disk/registry preflight
 devops webhook run                               # foreground (development)
 devops webhook install|start|stop|restart        # systemd unit management (root)

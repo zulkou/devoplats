@@ -1,3 +1,7 @@
+# Opt-in platform-managed dev environment (Compose only).
+# deploy.yml still builds on dev so promote has a :dev image; this workflow
+# only runs when the DEPLOY_DEV repository variable is set to true.
+
 name: Development Deployment
 
 on:
