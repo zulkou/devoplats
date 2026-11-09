@@ -14,11 +14,11 @@ source "${LIB_DIR}/lib/restore.sh"
 
 parse_args "$@"
 
-validate_args APP
+validate_args APP ENVIRONMENT
 init_environment
 init_logger
 
-[[ -n "$BACKUP_FILE" ]] || die "Usage: devops restore-db --app <app> [--env <env>] --backup <filename>"
+[[ -n "$BACKUP_FILE" ]] || die "Usage: devops restore-db --app <app> --env <env> --backup <filename>"
 backup_path="${BACKUP_DIR}/${BACKUP_FILE}"
 [[ -f "$backup_path" ]] || die "Backup file not found: ${backup_path}"
 

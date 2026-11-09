@@ -111,7 +111,7 @@ if healthcheck; then
     else
         newest_backup="$(ls -1t "${BACKUP_DIR}"/*.sql.gz 2>/dev/null | head -1)"
         if [[ -n "$newest_backup" ]]; then
-            log_warn "This only restored the application image. If the failed deploy included a destructive migration, restore the database first (interactive terminal only): devops restore-db --app ${APP} --backup $(basename "${newest_backup}")"
+            log_warn "This only restored the application image. If the failed deploy included a destructive migration, restore the database first (interactive terminal only): devops restore-db --app ${APP} --env ${ENVIRONMENT} --backup $(basename "${newest_backup}")"
         else
             log_warn "This only restored the application image. If the failed deploy included a destructive migration, restore the database manually (no backup found in ${BACKUP_DIR})"
         fi

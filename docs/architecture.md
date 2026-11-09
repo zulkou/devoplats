@@ -78,7 +78,7 @@ devops backup --app APP --env ENV
 devops migrate --app APP --env ENV
 devops healthcheck --app APP --env ENV
 devops test --app APP
-devops restore-db --app APP --backup FILE
+devops restore-db --app APP --env ENV --backup FILE
 devops doctor [--app APP --env ENV] [--tag TAG]
 devops webhook run|install|start|stop|restart|status|logs
 ```

@@ -184,7 +184,7 @@ devops backup    --app APP --env ENV             # dump DBs listed in config.yml
 devops migrate   --app APP --env ENV             # run migration.command in container
 devops healthcheck --app APP --env ENV           # GET healthcheck.url
 devops test      --app APP                       # run test.command/steps in <APPS_ROOT>/<app>
-devops restore-db --app APP [--env ENV] --backup FILE  # interactive only — never from CI
+devops restore-db --app APP --env ENV --backup FILE   # interactive only — never from CI
 devops doctor [--app APP --env ENV] [--tag TAG]  # SSH/engine/disk/registry preflight
 devops webhook run                               # foreground (development)
 devops webhook install|start|stop|restart        # systemd unit management (root)

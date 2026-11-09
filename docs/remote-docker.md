@@ -170,10 +170,6 @@ manually (`docker compose down` on the old host) — volumes do not migrate.
 If a target host is down, the deploy fails and automatic rollback fails with
 it; backups and history remain on the platform host either way.
 
-`restore-db` has no required environment, so pass `--env <env>` when
-`docker.host` is a per-environment map; otherwise it falls back to the global
-`DOCKER_HOST`.
-
 ## App constraints
 
 ### No bind mounts
