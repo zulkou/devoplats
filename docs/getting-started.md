@@ -85,7 +85,9 @@ server before pointing real applications at it.
 ### 1. Server and network
 
 - [ ] An always-on Linux server with a domain (or subdomain) pointed at it.
-- [ ] A TLS reverse proxy (Caddy, nginx, ...) forwarding to
+- [ ] Recommended: expose the webhook with a Cloudflare Tunnel (no public IP,
+      no open inbound port) — see [remote-setup.md](remote-setup.md).
+- [ ] Or a TLS reverse proxy (Caddy, nginx, ...) forwarding to
       `WEBHOOK_HOST:WEBHOOK_PORT`. It must pass `/webhooks/github` and
       `/healthz` through unchanged.
 - [ ] Firewall: allow `443` (and your admin port, e.g. `22`). Keep
@@ -182,6 +184,7 @@ rollout to Argo CD or Flux. See [examples/k8s/](../examples/k8s).
 
 ## Next
 
+- [remote-setup.md](remote-setup.md) — copy-paste runbook for a fresh server, Cloudflare Tunnel, multi-repo webhooks
 - [architecture.md](architecture.md) — GitHub integration, runners, deploy flow, reliability
 - [remote-docker.md](remote-docker.md) — split layout, SSH setup, doctor checks, constraints
 - [secret-management.md](secret-management.md) — secret layout and rotation runbooks

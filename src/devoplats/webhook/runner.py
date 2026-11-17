@@ -9,7 +9,7 @@ from .docker_ops import local_docker_env
 log = logging.getLogger(__name__)
 
 
-def start_runner(settings: Settings, job_id: int, labels: str) -> bool:
+def start_runner(settings: Settings, job_id: int, labels: str, repo_name: str | None = None) -> bool:
     container_name = f"runner-{job_id}"
     try:
         log.info("Starting runner for job %s labels=%s", job_id, labels)
@@ -26,8 +26,14 @@ def start_runner(settings: Settings, job_id: int, labels: str) -> bool:
         ]
         if settings.runner_scope == "org" or settings.org_name:
             runner_env += ["-e", f"ORG_NAME={settings.org_name}"]
-        if settings.runner_scope == "repo" or settings.repo_url:
-            runner_env += ["-e", f"REPO_URL={settings.repo_url}"]
+        # Repo scope: each webhook event carries its own repo; the global
+        # REPO_URL is only a fallback.
+        repo_url = repo_name if settings.runner_scope == "repo" else ""
+        repo_url = repo_url or settings.repo_url
+        if repo_url:
+            if "://" not in repo_url:
+                repo_url = f"https://github.com/{repo_url}"
+            runner_env += ["-e", f"REPO_URL={repo_url}"]
 
         dns_args: list[str] = []
         for dns in settings.dns_servers.split(","):

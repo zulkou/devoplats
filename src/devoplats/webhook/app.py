@@ -17,7 +17,7 @@ RECENT_TTL = 300
 
 def create_app(
     settings: Settings,
-    dispatch: Callable[[Settings, int, str], bool] | None = None,
+    dispatch: Callable[[Settings, int, str, str | None], bool] | None = None,
     thread_factory: Callable[..., Any] | None = None,
     timer_factory: Callable[..., Any] | None = None,
 ) -> Flask:
@@ -66,6 +66,7 @@ def create_app(
             remember(job_id)
             labels = job.get("labels", ["self-hosted", "linux"])
             label_str = ",".join(str(label) for label in labels)
+            repo_name = data.get("repository", {}).get("full_name")
 
             if "self-hosted" not in labels:
                 log.info("Job %s is hosted (labels=%s), no runner needed", job_id, label_str)
@@ -73,7 +74,7 @@ def create_app(
 
             worker = thread_factory(
                 target=dispatch,
-                args=(settings, job_id, label_str),
+                args=(settings, job_id, label_str, repo_name),
                 daemon=True,
             )
             worker.start()

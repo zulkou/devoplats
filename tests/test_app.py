@@ -52,14 +52,17 @@ def post_webhook(client: Flask.testing.FlaskClient, secret: str, payload: dict, 
     )
 
 
-def queued_job(job_id: int = 42, labels: list[str] | None = None) -> dict:
-    return {
+def queued_job(job_id: int = 42, labels: list[str] | None = None, repo: str | None = "owner/repo") -> dict:
+    payload = {
         "action": "queued",
         "workflow_job": {
             "id": job_id,
             "labels": labels if labels is not None else ["self-hosted", "linux"],
         },
     }
+    if repo is not None:
+        payload["repository"] = {"full_name": repo}
+    return payload
 
 
 def test_healthz(settings_factory) -> None:
@@ -100,6 +103,16 @@ def test_queued_self_hosted_dispatches_once(settings_factory) -> None:
     assert len(dispatched) == 1
     assert dispatched[0][1] == 42
     assert dispatched[0][2] == "self-hosted,linux"
+    assert dispatched[0][3] == "owner/repo"
+
+
+def test_queued_job_without_repository_dispatches_none(settings_factory) -> None:
+    settings = settings_factory(env_text="GITHUB_WEBHOOK_SECRET=secret\n")
+    dispatched: list = []
+    client = build_app(settings, dispatched).test_client()
+
+    assert post_webhook(client, "secret", queued_job(repo=None)).status_code == 200
+    assert dispatched[0][3] is None
 
 
 def test_hosted_job_is_ignored(settings_factory) -> None:

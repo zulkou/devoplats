@@ -22,7 +22,9 @@ A push to `dev` or `main` triggers the app repository's workflows. The
 HMAC signature and starts an ephemeral runner for queued self-hosted jobs.
 
 The runner image is `myoung34/github-runner:latest`. It is pulled on demand;
-`RUNNER_IMAGE` can pin a version or point at a private image. Runners mount:
+`RUNNER_IMAGE` can pin a version or point at a private image. In repo scope the
+repo is taken from each event's `repository.full_name`, so one webhook service
+can serve multiple repos; `REPO_URL` is only a fallback. Runners mount:
 
 - the platform checkout at the same path;
 - `<APPS_ROOT>`;
